@@ -36,32 +36,85 @@ import './theme/variables.css';
 import ActivityDetail from './pages/ActivityDetail';
 import ActivityForm from './pages/ActivityForm';
 
+import React, { useState } from 'react';
+import Login from './pages/Login';
+import { isAuthenticated } from './services/authApi';
+
 setupIonicReact();
 
-const App: React.FC = () => (
-  <IonApp>
-    <IonReactRouter>
-      <IonRouterOutlet>
-          <Route
-              path="/home"
-              element={<Home />}
-          />
 
-          <Route
-              path="/activities/:id"
-              element={<ActivityDetail />}
-          />
+const App: React.FC = () => {
+    const [authenticated, setAuthenticated] =
+        useState(isAuthenticated);
 
-          <Route path="/activities/new" element={<ActivityForm />} />
-          <Route path="/activities/:id/edit" element={<ActivityForm />} />
+    return (
+        <IonApp>
+            <IonReactRouter>
+                <IonRouterOutlet>
+                    <Route
+                        path="/login"
+                        element={
+                            authenticated
+                                ? <Navigate to="/home" replace />
+                                : <Login
+                                    onLogin={() => setAuthenticated(true)}
+                                />
+                        }
+                    />
 
-          <Route
-              path="/"
-              element={<Navigate to="/home" replace />}
-          />
-      </IonRouterOutlet>
-    </IonReactRouter>
-  </IonApp>
-);
+                    <Route
+                        path="/home"
+                        element={
+                            authenticated
+                                ? <Home
+                                    onLogout={() =>
+                                        setAuthenticated(false)
+                                    }
+                                />
+                                : <Navigate to="/login" replace />
+                        }
+                    />
+
+                    <Route
+                        path="/activities/new"
+                        element={
+                            authenticated
+                                ? <ActivityForm />
+                                : <Navigate to="/login" replace />
+                        }
+                    />
+
+                    <Route
+                        path="/activities/:id/edit"
+                        element={
+                            authenticated
+                                ? <ActivityForm />
+                                : <Navigate to="/login" replace />
+                        }
+                    />
+
+                    <Route
+                        path="/activities/:id"
+                        element={
+                            authenticated
+                                ? <ActivityDetail />
+                                : <Navigate to="/login" replace />
+                        }
+                    />
+
+                    <Route
+                        path="/"
+                        element={
+                            <Navigate
+                                to={authenticated ? '/home' : '/login'}
+                                replace
+                            />
+                        }
+                    />
+                </IonRouterOutlet>
+            </IonReactRouter>
+        </IonApp>
+    );
+};
 
 export default App;

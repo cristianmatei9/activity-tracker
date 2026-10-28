@@ -1,38 +1,60 @@
-import React from 'react';
-import {
-    IonPage,
-    IonHeader,
-    IonToolbar,
-    IonButtons,
-    IonBackButton,
-    IonTitle,
-    IonContent,
-    IonList,
-    IonItem,
-    IonLabel,
-    IonBadge, IonButton
-} from '@ionic/react';
-import {useNavigate, useParams} from 'react-router-dom';
 
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import {
+    IonPage, IonHeader, IonToolbar, IonTitle,
+    IonContent, IonItem, IonLabel, IonList,
+    IonBadge, IonButton, IonButtons, IonBackButton
+} from '@ionic/react';
+import { useNavigate, useParams } from 'react-router-dom';
+
 import { Activity } from '../models/Activity';
 import { getActivity } from '../services/activityApi';
+import { getCurrentUser } from '../services/authApi';
+import { loadActivities } from '../services/activityStorage';
 
 const ActivityDetail: React.FC = () => {
-    const { id } = useParams<{id: string}>();
+    const { id } = useParams<{ id: string }>();
+    const navigate = useNavigate();
 
     const [activity, setActivity] = useState<Activity | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
 
     useEffect(() => {
-        getActivity(Number(id))
-            .then(data => setActivity(data))
-            .catch(() => setError('Failed to load activity'))
-            .finally(() => setLoading(false));
-    }, [id]);
+        const user = getCurrentUser();
 
-    const navigate = useNavigate();
+        if (!user) {
+            setError('User not authenticated');
+            setLoading(false);
+            return;
+        }
+
+        const activityId = Number(id);
+
+        const local = loadActivities(user.id).find(
+            a => a.id === activityId
+        );
+
+        setActivity(local ?? null);
+        setError('');
+        setLoading(false);
+
+        if (activityId < 0) {
+            if (!local) setError('Activity not found');
+            return;
+        }
+
+        getActivity(activityId)
+            .then(data => {
+                setActivity(data);
+                setError('');
+            })
+            .catch(() => {
+                if (!local) {
+                    setError('Failed to load activity');
+                }
+            });
+    }, [id]);
 
     return (
         <IonPage>
@@ -41,9 +63,15 @@ const ActivityDetail: React.FC = () => {
                     <IonButtons slot="start">
                         <IonBackButton defaultHref="/home" />
                     </IonButtons>
+
                     <IonTitle>Activity Details</IonTitle>
+
                     <IonButtons slot="end">
-                        <IonButton onClick={() => navigate(`/activities/${id}/edit`)}>
+                        <IonButton
+                            onClick={() =>
+                                navigate(`/activities/${id}/edit`)
+                            }
+                        >
                             Edit
                         </IonButton>
                     </IonButtons>
@@ -51,15 +79,10 @@ const ActivityDetail: React.FC = () => {
             </IonHeader>
 
             <IonContent>
-                {loading ? (
-                    <IonItem>
-                        <IonLabel>Loading activity...</IonLabel>
-                    </IonItem>
-                ) : error ? (
-                    <IonItem>
-                        <IonLabel>{error}</IonLabel>
-                    </IonItem>
-                ) : activity ? (
+                {loading && <p>Loading activity...</p>}
+                {error && <p>{error}</p>}
+
+                {activity && (
                     <IonList>
                         <IonItem>
                             <IonLabel>
@@ -76,14 +99,20 @@ const ActivityDetail: React.FC = () => {
 
                         <IonItem>
                             <IonLabel>
-                                Duration: {activity.duration}
+                                Duration: {activity.duration} min
                             </IonLabel>
                         </IonItem>
 
                         <IonItem>
                             <IonLabel>Status</IonLabel>
-                            <IonBadge color={activity.completed ? 'success' : 'warning'}>
-                                {activity.completed ? 'Completed' : 'Pending'}
+                            <IonBadge
+                                color={activity.completed
+                                    ? 'success'
+                                    : 'warning'}
+                            >
+                                {activity.completed
+                                    ? 'Completed'
+                                    : 'Pending'}
                             </IonBadge>
                         </IonItem>
 
@@ -94,16 +123,19 @@ const ActivityDetail: React.FC = () => {
                                 </IonLabel>
                             </IonItem>
                         )}
+
+                        {activity.id < 0 && (
+                            <IonItem>
+                                <IonLabel color="warning">
+                                    Waiting for synchronization
+                                </IonLabel>
+                            </IonItem>
+                        )}
                     </IonList>
-                ) : (
-                    <IonItem>
-                        <IonLabel>Activity not found</IonLabel>
-                    </IonItem>
                 )}
             </IonContent>
-
         </IonPage>
     );
-}
+};
 
 export default ActivityDetail;
