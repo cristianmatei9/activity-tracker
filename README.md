@@ -53,7 +53,7 @@ Each activity contains the following properties:
 - Server-side search and filtering
 - Local search and filtering when offline
 
-### Ionic3 - Implemented Features
+## Ionic3 - Implemented Features
 
 - Photo uploading and location services
 - Maps integration
