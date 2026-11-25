@@ -53,11 +53,9 @@ Each activity contains the following properties:
 - Server-side search and filtering
 - Local search and filtering when offline
 
-## Planned Features
+### Ionic3 - Implemented Features
 
-### Ionic3
-
-- Camera and location services
+- Photo uploading and location services
 - Maps integration
 - Animations
 
