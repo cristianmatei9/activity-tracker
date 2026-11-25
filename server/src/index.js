@@ -6,6 +6,10 @@ const cors = require('cors');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const http = require('http');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const app = express();
@@ -299,9 +303,51 @@ const activities = [
     }
 ];
 
+const uploadsDirectory = path.join(__dirname, '..', 'uploads');
+
+fs.mkdirSync(uploadsDirectory, {
+    recursive: true
+});
+
+const uploadStorage = multer.diskStorage({
+    destination: (req, file, callback) => {
+        callback(null, uploadsDirectory);
+    },
+    filename: (req, file, callback) => {
+        const extension = file.mimetype === 'image/png'
+            ? '.png'
+            : '.jpg';
+
+        callback(null, `${crypto.randomUUID()}${extension}`);
+    }
+});
+
+const upload = multer({
+    storage: uploadStorage,
+    limits: {
+        fileSize: 5 * 1024 * 1024
+    },
+    fileFilter: (req, file, callback) => {
+        if (
+            file.mimetype !== 'image/jpeg' &&
+            file.mimetype !== 'image/png'
+        ) {
+            return callback(new Error('Only JPEG and PNG images are allowed'));
+        }
+
+        callback(null, true);
+    }
+});
 
 app.use('/activities', authenticateToken);
 
+function findUserActivity(req) {
+    return activities.find(
+        activity =>
+            activity.id === Number(req.params.id) &&
+            activity.userId === req.user.id
+    );
+}
 
 app.get('/activities', (req, res) => {
     let userActivities = activities.filter(
@@ -312,7 +358,6 @@ app.get('/activities', (req, res) => {
         req.query.limit !== undefined ||
         req.query.offset !== undefined;
 
-    // Keep the original endpoint for offline caching.
     if (!hasPagination) {
         return res.json(userActivities);
     }
@@ -360,6 +405,36 @@ app.get('/activities', (req, res) => {
 });
 
 
+app.get('/activities/:id/photo', (req, res) => {
+    const activity = findUserActivity(req);
+
+    if (!activity) {
+        return res.status(404).json({
+            message: 'Activity not found'
+        });
+    }
+
+    if (!activity.photo) {
+        return res.status(404).json({
+            message: 'Photo not found'
+        });
+    }
+
+    const filePath = path.join(
+        uploadsDirectory,
+        path.basename(activity.photo)
+    );
+
+    res.sendFile(filePath, error => {
+        if (error && !res.headersSent) {
+            res.status(404).json({
+                message: 'Photo file not found'
+            });
+        }
+    });
+});
+
+
 app.get('/activities/:id', (req, res) => {
     const activity = activities.find(
         activity =>
@@ -377,13 +452,27 @@ app.get('/activities/:id', (req, res) => {
 });
 
 function validateActivity(data) {
+    const validCoordinates =
+        (data.latitude == null && data.longitude == null) ||
+        (
+            typeof data.latitude === 'number' &&
+            typeof data.longitude === 'number' &&
+            Number.isFinite(data.latitude) &&
+            Number.isFinite(data.longitude) &&
+            data.latitude >= -90 &&
+            data.latitude <= 90 &&
+            data.longitude >= -180 &&
+            data.longitude <= 180
+        );
+
     return (
         typeof data.title === 'string' &&
         data.title.trim().length > 0 &&
         typeof data.date === 'string' &&
         data.date.trim().length > 0 &&
         Number.isFinite(Number(data.duration)) &&
-        Number(data.duration) > 0
+        Number(data.duration) > 0 &&
+        validCoordinates
     );
 }
 
@@ -394,7 +483,9 @@ function activityFields(data) {
         date: data.date,
         duration: Number(data.duration),
         completed: data.completed === true,
-        location: data.location ?? ''
+        location: data.location ?? '',
+        latitude: data.latitude ?? null,
+        longitude: data.longitude ?? null
     };
 }
 
@@ -410,7 +501,8 @@ app.post('/activities', (req, res) => {
     const newActivity = {
         id: Math.max(0, ...activities.map(a => a.id)) + 1,
         userId: req.user.id,
-        ...activityFields(data)
+        ...activityFields(data),
+        photo: null
     };
 
     activities.push(newActivity);
@@ -452,6 +544,68 @@ app.put('/activities/:id', (req, res) => {
     });
 
     res.json(activity);
+});
+
+app.post('/activities/:id/photo', (req, res, next) => {
+    const activity = findUserActivity(req);
+
+    if (!activity) {
+        return res.status(404).json({
+            message: 'Activity not found'
+        });
+    }
+
+    upload.single('photo')(req, res, error => {
+        if (error) {
+            return next(error);
+        }
+
+        if (!req.file) {
+            return res.status(400).json({
+                message: 'Photo is required'
+            });
+        }
+
+        const previousPhoto = activity.photo;
+
+        activity.photo = req.file.filename;
+
+        if (previousPhoto) {
+            const previousPath = path.join(
+                uploadsDirectory,
+                path.basename(previousPhoto)
+            );
+
+            fs.unlink(previousPath, () => {});
+        }
+
+        notifyUser(req.user.id, {
+            type: 'activity_updated',
+            activity
+        });
+
+        res.json(activity);
+    });
+});
+
+app.use((error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        return res.status(400).json({
+            message: error.message
+        });
+    }
+
+    if (error.message === 'Only JPEG and PNG images are allowed') {
+        return res.status(400).json({
+            message: error.message
+        });
+    }
+
+    console.error(error);
+
+    res.status(500).json({
+        message: 'Internal server error'
+    });
 });
 
 server.listen(PORT, () => {

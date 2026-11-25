@@ -1,0 +1,88 @@
+
+.activity-thumbnail {
+    width: 68px;
+    height: 68px;
+    min-width: 68px;
+    object-fit: cover;
+    border-radius: 10px;
+    margin-right: 14px;
+    margin-top: 8px;
+    margin-bottom: 8px;
+}
+
+@keyframes activityFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(18px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.activity-list-item {
+    animation: activityFadeIn 650ms ease-out both;
+}
+
+.activity-list-item:nth-child(2) {
+    animation-delay: 80ms;
+}
+
+.activity-list-item:nth-child(3) {
+    animation-delay: 160ms;
+}
+
+.activity-list-item:nth-child(4) {
+    animation-delay: 240ms;
+}
+
+.activity-list-item:nth-child(5) {
+    animation-delay: 320ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .activity-list-item {
+        animation: none;
+    }
+}
+
+.activity-list-item:active {
+    transform: scale(0.985);
+    transition: transform 150ms ease-out;
+}
+
+.sync-indicator {
+    animation: sync-pulse 1.8s ease-in-out infinite;
+    color: var(--ion-color-warning);
+}
+
+@keyframes activity-appear {
+    from {
+        opacity: 0;
+        transform: translateY(12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes sync-pulse {
+    0%, 100% {
+        opacity: 1;
+    }
+
+    50% {
+        opacity: 0.5;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .activity-list-item,
+    .sync-indicator {
+        animation: none;
+    }
+}
