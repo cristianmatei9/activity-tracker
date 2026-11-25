@@ -3,18 +3,18 @@ import { Activity } from '../models/Activity';
 import {
     ActivityInput,
     createActivity,
-    updateActivity
+    updateActivity,
+    uploadActivityPhoto
 } from './activityApi';
-import {
-    loadActivities,
-    saveActivities
-} from './activityStorage';
+import { loadActivities, saveActivities } from './activityStorage';
+import { readActivityPhoto } from './photoService';
 
 export type PendingOperation =
     | {
     type: 'CREATE';
     localId: number;
     data: ActivityInput;
+    serverId?: number;
 }
     | {
     type: 'UPDATE';
@@ -22,17 +22,15 @@ export type PendingOperation =
     data: ActivityInput;
 };
 
-const getKey = (userId: number) =>
-    `pending_operations_${userId}`;
+const getKey = (userId: number) => `pending_operations_${userId}`;
+const activeSyncs = new Set<number>();
 
-export function getPendingOperations(
-    userId: number
-): PendingOperation[] {
+export function getPendingOperations(userId: number): PendingOperation[] {
     try {
-        const data = JSON.parse(
+        const parsed: unknown = JSON.parse(
             localStorage.getItem(getKey(userId)) || '[]'
         );
-        return Array.isArray(data) ? data : [];
+        return Array.isArray(parsed) ? parsed as PendingOperation[] : [];
     } catch {
         return [];
     }
@@ -42,10 +40,7 @@ export function savePendingOperations(
     userId: number,
     operations: PendingOperation[]
 ): void {
-    localStorage.setItem(
-        getKey(userId),
-        JSON.stringify(operations)
-    );
+    localStorage.setItem(getKey(userId), JSON.stringify(operations));
 }
 
 export function addPendingOperation(
@@ -57,10 +52,11 @@ export function addPendingOperation(
     if (operation.type === 'UPDATE') {
         const create = operations.find(
             op => op.type === 'CREATE' &&
-                op.localId === operation.activityId
+                (op.localId === operation.activityId ||
+                    op.serverId === operation.activityId)
         );
 
-        if (create && create.type === 'CREATE') {
+        if (create?.type === 'CREATE') {
             create.data = operation.data;
             savePendingOperations(userId, operations);
             return;
@@ -82,12 +78,51 @@ export function addPendingOperation(
     savePendingOperations(userId, operations);
 }
 
-const activeSyncs = new Set<number>();
+function isLocalPhoto(photo?: string): boolean {
+    return Boolean(photo?.startsWith('activity_'));
+}
+
+function replaceLocalActivity(
+    userId: number,
+    oldId: number,
+    updated: Activity
+): void {
+    const local = loadActivities(userId);
+    const index = local.findIndex(
+        a => a.id === oldId || a.id === updated.id
+    );
+
+    if (index >= 0) {
+        local[index] = updated;
+    } else {
+        local.push(updated);
+    }
+
+    saveActivities(
+        userId,
+        local.filter(
+            (a, i) => local.findIndex(b => b.id === a.id) === i
+        )
+    );
+}
+
+async function uploadPhotoIfNeeded(
+    activity: Activity,
+    photo?: string
+): Promise<Activity> {
+    if (!isLocalPhoto(photo)) return activity;
+
+    const fileName = photo as string;
+    const blob = await readActivityPhoto(fileName);
+
+    return uploadActivityPhoto(activity.id, blob, fileName);
+}
 
 export async function syncPendingOperations(
     userId: number
 ): Promise<boolean> {
     if (activeSyncs.has(userId)) return false;
+    if (!navigator.onLine) return false;
 
     activeSyncs.add(userId);
 
@@ -100,42 +135,87 @@ export async function syncPendingOperations(
 
             try {
                 if (operation.type === 'CREATE') {
-                    const created = await createActivity(
-                        operation.data
+                    let serverId = operation.serverId;
+
+                    if (serverId == null) {
+                        const created = await createActivity({
+                            ...operation.data,
+                            photo: undefined
+                        });
+
+                        serverId = created.id;
+
+                        savePendingOperations(userId, [
+                            { ...operation, serverId },
+                            ...operations.slice(1)
+                        ]);
+
+                        replaceLocalActivity(
+                            userId,
+                            operation.localId,
+                            {
+                                ...created,
+                                photo: isLocalPhoto(operation.data.photo)
+                                    ? operation.data.photo
+                                    : created.photo
+                            }
+                        );
+                    }
+
+                    const data = operation.data;
+
+                    const updated = await updateActivity(serverId, {
+                        ...data,
+                        photo: undefined
+                    });
+
+                    const result = await uploadPhotoIfNeeded(
+                        updated,
+                        data.photo
                     );
 
-                    const activities = loadActivities(userId);
-
-                    saveActivities(
+                    replaceLocalActivity(
                         userId,
-                        activities.map(activity =>
-                            activity.id === operation.localId
-                                ? created
-                                : activity
+                        operation.localId,
+                        result
+                    );
+
+                    const latest = getPendingOperations(userId);
+
+                    savePendingOperations(
+                        userId,
+                        latest.slice(1).map(op =>
+                            op.type === 'UPDATE' &&
+                            op.activityId === operation.localId
+                                ? { ...op, activityId: serverId }
+                                : op
                         )
                     );
                 } else {
                     const updated = await updateActivity(
                         operation.activityId,
-                        operation.data
+                        {
+                            ...operation.data,
+                            photo: undefined
+                        }
                     );
 
-                    const activities = loadActivities(userId);
+                    const result = await uploadPhotoIfNeeded(
+                        updated,
+                        operation.data.photo
+                    );
 
-                    saveActivities(
+                    replaceLocalActivity(
                         userId,
-                        activities.map(activity =>
-                            activity.id === operation.activityId
-                                ? updated
-                                : activity
-                        )
+                        operation.activityId,
+                        result
+                    );
+
+                    savePendingOperations(
+                        userId,
+                        getPendingOperations(userId).slice(1)
                     );
                 }
-
-                savePendingOperations(
-                    userId,
-                    getPendingOperations(userId).slice(1)
-                );
             } catch (error) {
                 console.error('Synchronization failed:', error);
                 return false;
@@ -152,30 +232,29 @@ export function mergeActivities(
 ): Activity[] {
     const local = loadActivities(userId);
     const pending = getPendingOperations(userId);
+    const localById = new Map(local.map(a => [a.id, a]));
+    const pendingIds = new Set<number>();
 
-    const createIds = new Set(
-        pending
-            .filter(op => op.type === 'CREATE')
-            .map(op => op.localId)
-    );
-
-    const updateIds = new Set(
-        pending
-            .filter(op => op.type === 'UPDATE')
-            .map(op => op.activityId)
-    );
-
-    const merged = serverActivities.map(activity => {
-        if (updateIds.has(activity.id)) {
-            return local.find(a => a.id === activity.id)
-                || activity;
+    for (const operation of pending) {
+        if (operation.type === 'CREATE') {
+            pendingIds.add(operation.serverId ?? operation.localId);
+        } else {
+            pendingIds.add(operation.activityId);
         }
-        return activity;
-    });
+    }
+
+    const merged = serverActivities.map(activity =>
+        pendingIds.has(activity.id)
+            ? localById.get(activity.id) ?? activity
+            : activity
+    );
+
+    const seen = new Set(merged.map(a => a.id));
 
     for (const activity of local) {
-        if (createIds.has(activity.id)) {
+        if (pendingIds.has(activity.id) && !seen.has(activity.id)) {
             merged.push(activity);
+            seen.add(activity.id);
         }
     }
 

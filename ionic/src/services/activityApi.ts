@@ -18,6 +18,14 @@ function authHeaders(): HeadersInit {
     };
 }
 
+function photoAuthHeaders(): HeadersInit {
+    const token = getToken();
+
+    return token
+        ? { Authorization: `Bearer ${token}` }
+        : {};
+}
+
 export async function getActivities(): Promise<Activity[]> {
     const response = await fetch(`${API_URL}/activities`, {
         headers: authHeaders()
@@ -114,4 +122,46 @@ export async function getActivitiesPage(
     }
 
     return response.json();
+}
+
+export async function uploadActivityPhoto(
+    activityId: number,
+    photo: Blob,
+    fileName: string
+): Promise<Activity> {
+    const formData = new FormData();
+
+    formData.append('photo', photo, fileName);
+
+    const response = await fetch(
+        `${API_URL}/activities/${activityId}/photo`,
+        {
+            method: 'POST',
+            headers: photoAuthHeaders(),
+            body: formData
+        }
+    );
+
+    if (!response.ok) {
+        throw new HttpError(response.status);
+    }
+
+    return response.json();
+}
+
+export async function getActivityPhoto(
+    activityId: number
+): Promise<Blob> {
+    const response = await fetch(
+        `${API_URL}/activities/${activityId}/photo`,
+        {
+            headers: photoAuthHeaders()
+        }
+    );
+
+    if (!response.ok) {
+        throw new HttpError(response.status);
+    }
+
+    return response.blob();
 }

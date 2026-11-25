@@ -6,5 +6,7 @@ export interface Activity {
     duration: number;
     completed: boolean;
     location?: string;
+    latitude?: number;
+    longitude?: number;
     photo?: string;
 }

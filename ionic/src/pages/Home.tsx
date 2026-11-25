@@ -8,11 +8,22 @@ import React, {
 } from 'react';
 
 import {
-    IonPage, IonHeader, IonToolbar, IonTitle,
-    IonContent, IonList, IonItem, IonLabel,
-    IonBadge, IonButtons, IonButton,
-    IonInput, IonSelect, IonSelectOption,
-    IonInfiniteScroll, IonInfiniteScrollContent,
+    IonPage,
+    IonHeader,
+    IonToolbar,
+    IonTitle,
+    IonContent,
+    IonList,
+    IonItem,
+    IonLabel,
+    IonBadge,
+    IonButtons,
+    IonButton,
+    IonInput,
+    IonSelect,
+    IonSelectOption,
+    IonInfiniteScroll,
+    IonInfiniteScrollContent,
     useIonViewWillEnter
 } from '@ionic/react';
 
@@ -26,9 +37,7 @@ import {
     logout,
     getCurrentUser
 } from '../services/authApi';
-import {
-    loadActivities
-} from '../services/activityStorage';
+import { loadActivities } from '../services/activityStorage';
 import {
     getPendingOperations,
     mergeActivities,
@@ -37,6 +46,7 @@ import {
 import {
     connectActivityWebSocket
 } from '../services/activityWebSocket';
+import ActivityThumbnail from '../components/ActivityThumbnail';
 
 import './Home.css';
 
@@ -49,7 +59,6 @@ function getCompletedFilter(
     if (filter === 'pending') return false;
     return undefined;
 }
-
 
 interface HomeProps {
     onLogout: () => void;
@@ -82,9 +91,6 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
         setActivities(loadActivities(userId));
         setPendingCount(getPendingOperations(userId).length);
 
-        if (loadingRef.current) return;
-        loadingRef.current = true;
-
         try {
             await syncPendingOperations(userId);
 
@@ -95,31 +101,80 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
                 getCompletedFilter(filter)
             );
 
+            const all = await getActivities();
+
             if (version !== refreshVersion.current) return;
 
-            setActivities(page.items);
+            const merged = mergeActivities(userId, all);
+            const pending = getPendingOperations(userId);
+            const pendingIds = new Set<number>();
+
+            for (const operation of pending) {
+                if (operation.type === 'CREATE') {
+                    pendingIds.add(
+                        operation.serverId ?? operation.localId
+                    );
+                } else {
+                    pendingIds.add(operation.activityId);
+                }
+            }
+
+            const matches = (activity: Activity) => {
+                const query = search.toLowerCase();
+
+                const matchesSearch =
+                    activity.title.toLowerCase().includes(query) ||
+                    activity.description.toLowerCase().includes(query);
+
+                const matchesFilter =
+                    filter === 'all' ||
+                    (filter === 'completed' && activity.completed) ||
+                    (filter === 'pending' && !activity.completed);
+
+                return matchesSearch && matchesFilter;
+            };
+
+            const byId = new Map(
+                merged.map(activity => [activity.id, activity])
+            );
+
+            const pageActivities = page.items.map(
+                activity => byId.get(activity.id) ?? activity
+            );
+
+            const existing = new Set(
+                pageActivities.map(activity => activity.id)
+            );
+
+            const pendingActivities = merged.filter(
+                activity =>
+                    pendingIds.has(activity.id) &&
+                    !existing.has(activity.id) &&
+                    matches(activity)
+            );
+
+            setActivities([
+                ...pendingActivities,
+                ...pageActivities.filter(matches)
+            ]);
+
             setOffset(page.items.length);
             setTotal(page.total);
             setServerAvailable(true);
             setOnline(true);
             setVisibleCount(PAGE_SIZE);
-
-            const pending = getPendingOperations(userId);
             setPendingCount(pending.length);
-            setError(pending.length > 0
-                ? 'Some activities are waiting for synchronization.'
-                : '');
 
-            // Keep the complete offline cache updated.
-            const all = await getActivities();
-
-            if (version === refreshVersion.current) {
-                mergeActivities(userId, all);
-            }
+            setError(
+                pending.length > 0
+                    ? 'Some activities are waiting for synchronization.'
+                    : ''
+            );
         } catch {
             if (version !== refreshVersion.current) return;
 
             const local = loadActivities(userId);
+
             setActivities(local);
             setOffset(0);
             setTotal(local.length);
@@ -127,12 +182,12 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
             setOnline(navigator.onLine);
             setPendingCount(getPendingOperations(userId).length);
             setError('Server unavailable. Showing local activities.');
-        } finally {
-            loadingRef.current = false;
         }
     }, [search, filter]);
 
     const loadMore = async () => {
+        const version = refreshVersion.current;
+
         if (loadingRef.current) return;
 
         if (!serverAvailable) {
@@ -152,19 +207,27 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
                 getCompletedFilter(filter)
             );
 
+            if (version !== refreshVersion.current) return;
+
             setActivities(previous => {
-                const ids = new Set(previous.map(a => a.id));
+                const ids = new Set(
+                    previous.map(activity => activity.id)
+                );
 
                 return [
                     ...previous,
-                    ...page.items.filter(a => !ids.has(a.id))
+                    ...page.items.filter(
+                        activity => !ids.has(activity.id)
+                    )
                 ];
             });
 
             setOffset(value => value + page.items.length);
             setTotal(page.total);
         } catch {
-            setError('Failed to load the next page.');
+            if (version === refreshVersion.current) {
+                setError('Failed to load the next page.');
+            }
         } finally {
             loadingRef.current = false;
         }
@@ -183,9 +246,16 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
         const handleOffline = () => {
             setOnline(false);
             setServerAvailable(false);
-            setActivities(
-                loadActivities(getCurrentUser()?.id ?? 0)
-            );
+            refreshVersion.current += 1;
+
+            const user = getCurrentUser();
+
+            if (user) {
+                setActivities(loadActivities(user.id));
+                setPendingCount(
+                    getPendingOperations(user.id).length
+                );
+            }
         };
 
         window.addEventListener('online', handleOnline);
@@ -196,6 +266,7 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
 
             if (
                 user &&
+                navigator.onLine &&
                 getPendingOperations(user.id).length > 0
             ) {
                 void refresh();
@@ -219,7 +290,6 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
         return () => socket.close();
     }, [refresh]);
 
-
     useEffect(() => {
         const timeout = window.setTimeout(() => {
             void refresh();
@@ -227,7 +297,6 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
 
         return () => window.clearTimeout(timeout);
     }, [search, filter, refresh]);
-
 
     const filteredActivities = useMemo(() => {
         const query = search.toLowerCase();
@@ -293,7 +362,7 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
                 </IonBadge>
 
                 {pendingCount > 0 && (
-                    <p>
+                    <p className="sync-indicator">
                         {pendingCount} operation(s) waiting for synchronization
                     </p>
                 )}
@@ -321,10 +390,14 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
                             setVisibleCount(PAGE_SIZE);
                         }}
                     >
-                        <IonSelectOption value="all">All</IonSelectOption>
+                        <IonSelectOption value="all">
+                            All
+                        </IonSelectOption>
+
                         <IonSelectOption value="completed">
                             Completed
                         </IonSelectOption>
+
                         <IonSelectOption value="pending">
                             Pending
                         </IonSelectOption>
@@ -336,24 +409,35 @@ const Home: React.FC<HomeProps> = ({ onLogout }) => {
                         <IonItem
                             key={activity.id}
                             button
+                            className="activity-list-item"
                             onClick={() =>
                                 navigate(`/activities/${activity.id}`)
                             }
                         >
+                            <ActivityThumbnail activity={activity} />
+
                             <IonLabel>
                                 <h2>{activity.title}</h2>
+
                                 <p>
                                     {activity.date} | {activity.duration} min
                                 </p>
+
+                                {activity.location && (
+                                    <p>{activity.location}</p>
+                                )}
+
                                 {activity.id < 0 && (
                                     <p>Not synchronized</p>
                                 )}
                             </IonLabel>
 
                             <IonBadge
-                                color={activity.completed
-                                    ? 'success'
-                                    : 'warning'}
+                                color={
+                                    activity.completed
+                                        ? 'success'
+                                        : 'warning'
+                                }
                             >
                                 {activity.completed
                                     ? 'Completed'
